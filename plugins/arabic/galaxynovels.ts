@@ -160,12 +160,16 @@ class GalaxyNovels implements Plugin.PluginBase {
           : `${this.baseUrl}${chaptersIndexUrl}`;
         const index = await this.fetchJson<ChaptersIndex>(indexUrl);
 
-        chapters = index.chapters.map(ch => ({
-          name: ch.label + (ch.title ? `: ${ch.title}` : ''),
-          path: `${novelPath}chapter-${ch.id}/`,
-          chapterNumber: ch.position,
-          releaseTime: ch.date_iso?.split('T')[0] || '',
-        }));
+        chapters = index.chapters.map(ch => {
+  const chapterUrl = new URL(ch.url, this.baseUrl);
+
+  return {
+    name: ch.label + (ch.title ? `: ${ch.title}` : ''),
+    path: chapterUrl.pathname + chapterUrl.search,
+    chapterNumber: ch.position,
+    releaseTime: ch.date_iso?.split('T')[0] || '',
+  };
+});
       } catch {
         // fallback to HTML parsing
       }
@@ -225,8 +229,8 @@ class GalaxyNovels implements Plugin.PluginBase {
       }
     }
 
-    const url = `${this.baseUrl}${chapterPath}`;
-    const html = await this.fetchHtml(url);
+    const url = new URL(chapterPath, this.site).toString();
+const html = await this.fetchHtml(url);
     const $ = loadCheerio(html);
     const content =
       $('article.wor-chapter-content, .wor-chapter-text, .entry-content').html();
