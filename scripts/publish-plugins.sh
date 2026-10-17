@@ -1,5 +1,5 @@
 
-#!/bin/bash
+#!/bin/sh
 
 if [ -z "$GITHUB_STEP_SUMMARY" ]; then
     GITHUB_STEP_SUMMARY="/dev/stdout"
@@ -13,52 +13,50 @@ dist="plugins/v$version"
 
 echo "Publishing plugins: $current -> $dist (v$version)"
 
-if [[ "$1" == "--all-branches" ]]; then
+if [ "$1" = "--all-branches" ]; then
     rm -rf .dist .js
     git fetch --all
 
-    # Process compatible source branches, with patch-1 last.
-    mapfile -t branches < <(
+    # Process patch-1 last so its plugin builds take precedence.
+    branches=$(
         git branch -r |
         sed 's/^[* ]*//' |
         grep -v '\->' |
         grep -v '/patch-1$' |
-        sort
+        sort || true
     )
 
     if git show-ref --verify --quiet refs/remotes/origin/patch-1; then
-        branches+=("origin/patch-1")
+        branches="${branches}
+origin/patch-1"
     fi
 
-    for branch in "${branches[@]}"; do
-        # Published branches contain build artifacts, not source scripts.
+    for branch in $branches; do
+        # Skip branches without the publishing script.
         if ! git cat-file -e "$branch:scripts/publish-plugins.sh" 2>/dev/null; then
             echo "Skipping $branch (publish script not present)"
             continue
         fi
 
-        if ! diff -q scripts/publish-plugins.sh \
-            <(git show "$branch:scripts/publish-plugins.sh") >/dev/null; then
+        tmp_script=$(mktemp)
+        git show "$branch:scripts/publish-plugins.sh" > "$tmp_script"
+
+        if ! diff -q scripts/publish-plugins.sh "$tmp_script" >/dev/null 2>&1; then
+            rm -f "$tmp_script"
             echo "Skipping $branch (script version mismatch)"
             continue
         fi
+        rm -f "$tmp_script"
 
         echo "::group::Branch $branch"
         echo "Processing: $branch"
 
-        # Preserve generated files between source branches.
-        git stash push -a -- .dist .js || {
-            echo "ERROR: Failed to stash generated files"
-            exit 1
-        }
+        git stash push -a -- .dist .js
 
         git checkout -f "$branch"
 
         if git stash list -1 | grep -q .; then
-            git stash pop || {
-                echo "ERROR: Failed to restore generated files"
-                exit 1
-            }
+            git stash pop
         fi
 
         npm run clean:multisrc
@@ -84,7 +82,6 @@ if [[ "$1" == "--all-branches" ]]; then
     echo "::group::Publish All Branches"
     echo "Publishing combined plugins..."
 
-    # Ensure the destination branch can be recreated.
     git checkout -f "$current"
 
     if git show-ref --verify --quiet "refs/heads/$dist"; then
