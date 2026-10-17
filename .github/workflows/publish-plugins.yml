@@ -1,7 +1,8 @@
 name: Publish Plugins
 
 on:
-  push:
+ workflow_dispatch:
+ push:
     branches:
       - master
     paths:
