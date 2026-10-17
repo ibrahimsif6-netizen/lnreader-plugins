@@ -1,7 +1,7 @@
 
 #!/bin/bash
 
-set -o pipefail
+
 
 if [ -z "$GITHUB_STEP_SUMMARY" ]; then
     GITHUB_STEP_SUMMARY="/dev/stdout"
