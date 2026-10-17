@@ -1,3 +1,4 @@
+
 import { load as loadCheerio } from 'cheerio';
 import { fetchApi } from '@libs/fetch';
 import { Plugin } from '@/types/plugin';
@@ -22,18 +23,21 @@ type ChaptersIndex = {
 };
 
 type ChapterContentResponse = {
-  schema: number;
-  data: {
-    content_html: string;
-    display_title: string;
-    navigation: { next_url: string; previous_url: string };
+  schema?: number;
+  data?: {
+    content_html?: string;
+    display_title?: string;
+    navigation?: {
+      next_url: string;
+      previous_url: string;
+    };
   };
 };
 
 class GalaxyNovels implements Plugin.PluginBase {
   id = 'galaxynovels';
   name = 'Galaxy Novels';
-  version = '1.1.0';
+  version = '1.1.1';
   icon = 'src/ar/galaxynovels/icon.png';
   site = 'https://galaxynovels.com/';
 
@@ -89,6 +93,7 @@ class GalaxyNovels implements Plugin.PluginBase {
     const period = filters.period.value;
 
     let url: string;
+
     if (sort === 'new') {
       url = `${this.baseUrl}/novels/?sort=new&page=${pageNo}`;
     } else if (sort === 'recent') {
@@ -99,12 +104,11 @@ class GalaxyNovels implements Plugin.PluginBase {
 
     const html = await this.fetchHtml(url);
     const $ = loadCheerio(html);
-
     const novels: Plugin.NovelItem[] = [];
+
     $('article.wor-novel-card').each((_, el) => {
       const $el = $(el);
-      const coverLink = $el.find('a.wor-novel-card__cover');
-      const href = coverLink.attr('href');
+      const href = $el.find('a.wor-novel-card__cover').attr('href');
       const img = $el.find('img.wor-cover-img');
       const cover =
         img.attr('data-src') || img.attr('src') || undefined;
@@ -125,7 +129,7 @@ class GalaxyNovels implements Plugin.PluginBase {
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
-    const url = `${this.baseUrl}${novelPath}`;
+    const url = new URL(novelPath, this.site).toString();
     const html = await this.fetchHtml(url);
     const $ = loadCheerio(html);
 
@@ -136,18 +140,20 @@ class GalaxyNovels implements Plugin.PluginBase {
     const summary = $('.wor-single-summary__text').text().trim();
 
     const genres: string[] = [];
+
     $('a.wor-tag-pill').each((_, el) => {
       genres.push($(el).text().trim());
     });
 
     const statusText = $('span.wor-cover-status').text().trim();
+
     const statusMap: Record<string, string> = {
       'مستمرة': NovelStatus.Ongoing,
       'مكتملة': NovelStatus.Completed,
       'متوقفة': NovelStatus.OnHiatus,
     };
-    const status = statusMap[statusText] || NovelStatus.Unknown;
 
+    const status = statusMap[statusText] || NovelStatus.Unknown;
     const chaptersContainer = $('[data-wor-chapters-container]');
     const chaptersIndexUrl = chaptersContainer.attr('data-index-url');
 
@@ -155,46 +161,67 @@ class GalaxyNovels implements Plugin.PluginBase {
 
     if (chaptersIndexUrl) {
       try {
-        const indexUrl = chaptersIndexUrl.startsWith('http')
-          ? chaptersIndexUrl
-          : `${this.baseUrl}${chaptersIndexUrl}`;
+        const indexUrl = new URL(
+          chaptersIndexUrl,
+          this.site,
+        ).toString();
+
         const index = await this.fetchJson<ChaptersIndex>(indexUrl);
 
-        chapters = index.chapters.map(ch => {
-  const chapterUrl = new URL(ch.url, this.baseUrl);
+        if (Array.isArray(index.chapters)) {
+          chapters = index.chapters
+            .filter(ch => ch.url || ch.content_api || ch.id)
+            .map(ch => {
+              const chapterUrl = new URL(
+                ch.url || `chapter-${ch.id}/`,
+                url,
+              );
 
-  return {
-    name: ch.label + (ch.title ? `: ${ch.title}` : ''),
-    path: chapterUrl.pathname + chapterUrl.search,
-    chapterNumber: ch.position,
-    releaseTime: ch.date_iso?.split('T')[0] || '',
-  };
-});
+              return {
+                name:
+                  ch.label +
+                  (ch.title ? `: ${ch.title}` : ''),
+                path: chapterUrl.pathname + chapterUrl.search,
+                chapterNumber: ch.position,
+                releaseTime: ch.date_iso?.split('T')[0] || '',
+              };
+            });
+        }
       } catch {
-        // fallback to HTML parsing
+        // Fall back to chapter links in the HTML.
       }
     }
 
     if (chapters.length === 0) {
       $('article.wor-novel-chapter-item').each((_, el) => {
         const $el = $(el);
-        const chapterLink = $el.find('h3 a').attr('href') || $el.find('a.wor-novel-chapter-item__num').attr('href');
-        const chapterName = $el.find('h3 a').text().trim() || $el.find('a.wor-novel-chapter-item__num').text().trim();
+
+        const chapterLink =
+          $el.find('h3 a').attr('href') ||
+          $el.find('a.wor-novel-chapter-item__num').attr('href');
+
+        const chapterName =
+          $el.find('h3 a').text().trim() ||
+          $el.find('a.wor-novel-chapter-item__num').text().trim();
+
         const chapterId = $el.attr('data-chapter-id');
-        const timeEl = $el.find('time');
-        const releaseTime = timeEl.attr('datetime')?.split('T')[0] || '';
+        const releaseTime =
+          $el.find('time').attr('datetime')?.split('T')[0] || '';
 
         if (!chapterLink) return;
 
-        const path = chapterId
-          ? `${novelPath}chapter-${chapterId}/`
-          : new URL(chapterLink, this.site).pathname;
+        const path = new URL(chapterLink, url).pathname;
         const numMatch = path.match(/chapter-(\d+)/);
-        const chapterNumber = numMatch ? parseInt(numMatch[1]) : 0;
+        const chapterNumber = numMatch
+          ? Number(numMatch[1])
+          : 0;
 
         chapters.push({
           name: chapterName,
-          path,
+          path:
+            chapterId && !numMatch
+              ? `${path.replace(/\/?$/, '/') }chapter-${chapterId}/`
+              : path,
           chapterNumber,
           releaseTime,
         });
@@ -214,27 +241,38 @@ class GalaxyNovels implements Plugin.PluginBase {
   }
 
   async parseChapter(chapterPath: string): Promise<string> {
-    const idMatch = chapterPath.match(/chapter-(\d+)/);
+    const chapterUrl = new URL(chapterPath, this.site);
+    const idMatch = chapterUrl.pathname.match(/chapter-(\d+)/);
     const chapterId = idMatch?.[1];
 
     if (chapterId) {
-      const apiUrl = `${this.baseUrl}/wp-json/wor-reader-app/v1/chapters/${chapterId}`;
+      const apiUrl =
+        `${this.baseUrl}/wp-json/wor-reader-app/v1/chapters/${chapterId}`;
+
       try {
-        const response = await this.fetchJson<ChapterContentResponse>(apiUrl);
+        const response =
+          await this.fetchJson<ChapterContentResponse>(apiUrl);
+
         if (response.data?.content_html) {
           return response.data.content_html;
         }
       } catch {
-        // fallback to HTML
+        // Fall back to the regular chapter page.
       }
     }
 
-    const url = new URL(chapterPath, this.site).toString();
-const html = await this.fetchHtml(url);
+    const html = await this.fetchHtml(chapterUrl.toString());
     const $ = loadCheerio(html);
-    const content =
-      $('article.wor-chapter-content, .wor-chapter-text, .entry-content').html();
-    return content || '<p>Content not available.</p>';
+
+    const content = $(
+      'article.wor-chapter-content, .wor-chapter-text, .entry-content',
+    ).html();
+
+    if (content) {
+      return content;
+    }
+
+    throw new Error('Chapter content was not found on the page.');
   }
 
   async searchNovels(
@@ -242,10 +280,13 @@ const html = await this.fetchHtml(url);
     pageNo: number,
   ): Promise<Plugin.NovelItem[]> {
     const manifestUrl =
-      'https://galaxynovels.com/wp-content/uploads/wor-reader-cache/search/manifest.json';
-    const manifest = await this.fetchJson<{
-      index: string;
-    }>(manifestUrl);
+      `${this.baseUrl}/wp-content/uploads/wor-reader-cache/search/manifest.json`;
+
+    const manifest = await this.fetchJson<{ index: string }>(
+      manifestUrl,
+    );
+
+    const indexUrl = new URL(manifest.index, this.site).toString();
 
     const searchIndex = await this.fetchJson<{
       items: {
@@ -254,9 +295,10 @@ const html = await this.fetchHtml(url);
         c: string;
         s: string;
       }[];
-    }>(manifest.index);
+    }>(indexUrl);
 
     const term = searchTerm.toLowerCase();
+
     const filtered = searchIndex.items.filter(
       n =>
         n.t.toLowerCase().includes(term) ||
@@ -269,9 +311,7 @@ const html = await this.fetchHtml(url);
     return filtered.slice(offset, offset + limit).map(novel => ({
       name: novel.t,
       path: novel.u,
-      cover: novel.c.startsWith('http')
-        ? novel.c
-        : `${this.baseUrl}${novel.c}`,
+      cover: new URL(novel.c, this.site).toString(),
     }));
   }
 }
